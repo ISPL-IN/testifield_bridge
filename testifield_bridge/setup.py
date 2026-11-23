@@ -166,6 +166,15 @@ def make_sandbox_fixtures(company="INOV IT Solutions Pvt Ltd", abbr="ISPL"):
         i.is_stock_item = 1
         i.has_serial_no = 1
         i.serial_no_series = "LED120-.#####"
+        if frappe.get_meta("Item").has_field("gst_hsn_code"):  # India Compliance requires one
+            hsn = "940542"  # luminaires and lighting fittings designed for use solely with LEDs
+            if not frappe.db.exists("GST HSN Code", hsn):
+                h = frappe.new_doc("GST HSN Code")
+                h.hsn_code = hsn
+                h.description = "Luminaires and lighting fittings, LED"
+                h.flags.ignore_permissions = True
+                h.insert()
+            i.gst_hsn_code = hsn
         i.flags.ignore_permissions = True
         i.insert()
     out["item"] = "LED-120W"
