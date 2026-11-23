@@ -79,11 +79,13 @@ def ensure_webhooks(url=None, secret=None):
             wh.webhook_docevent = ev
             wh.request_method = "POST"
             wh.request_structure = "JSON"
-            wh.webhook_json = json.dumps({
+            # The webhook renders with the document as plain data in Frappe's
+            # sandbox (no doc.as_json()); `tojson` puts it in as a JSON object.
+            head = json.dumps({
                 "doctype": "{{ doc.doctype }}", "name": "{{ doc.name }}", "event": ev,
                 "modified": "{{ doc.modified }}", "docstatus": "{{ doc.docstatus }}", "tf_ref": "{{ doc.tf_ref }}",
-                "doc": "{{ doc.as_json() }}",
             })
+            wh.webhook_json = head[:-1] + ', "doc": {{ doc | tojson }}}'
             wh.set("webhook_headers", [])
             wh.append("webhook_headers", {"key": "Content-Type", "value": "application/json"})
             wh.enable_security = 1
