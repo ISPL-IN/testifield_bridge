@@ -133,8 +133,13 @@ def make_integration_user(email="testifield@localhost", full_name="Testifield", 
 
 def make_sandbox_fixtures(company="INOV IT Solutions Pvt Ltd", abbr="ISPL"):
     """A sandbox's minimum: a company, a free-issue supplier, a serialised
-    LED item, a site warehouse, a project cost centre. Idempotent."""
+    LED item, a site warehouse, a project cost centre. Idempotent. On a fresh
+    site it first completes ERPNext's setup wizard (India, INR, April–March),
+    which makes the company with its defaults; a company inserted by hand on
+    a site that never ran the wizard fails ('Could not find Warehouse Type')."""
     out = {}
+    if not frappe.db.get_single_value("System Settings", "setup_complete"):
+        out["setup_wizard"] = complete_setup_wizard(company, abbr)
     if not frappe.db.exists("Company", company):
         c = frappe.new_doc("Company")
         c.company_name = company
@@ -183,3 +188,30 @@ def make_sandbox_fixtures(company="INOV IT Solutions Pvt Ltd", abbr="ISPL"):
     out["cost_center"] = cc
     frappe.db.commit()
     return out
+
+
+def complete_setup_wizard(company, abbr):
+    """ERPNext's first-run wizard without the browser: the same stages the
+    desk runs, for an Indian company with an April–March fiscal year."""
+    from frappe.desk.page.setup_wizard.setup_wizard import setup_complete
+    from frappe.utils import getdate, nowdate
+
+    today = getdate(nowdate())
+    start_year = today.year if today.month >= 4 else today.year - 1
+    args = {
+        "language": "English",
+        "country": "India",
+        "timezone": "Asia/Kolkata",
+        "currency": "INR",
+        "full_name": "Administrator",
+        "company_name": company,
+        "company_abbr": abbr,
+        "chart_of_accounts": "Standard",
+        "fy_start_date": f"{start_year}-04-01",
+        "fy_end_date": f"{start_year + 1}-03-31",
+        "setup_demo": 0,
+    }
+    frappe.set_user("Administrator")
+    r = setup_complete(args)
+    frappe.db.commit()
+    return r if isinstance(r, dict) else {"status": "done"}
