@@ -5,7 +5,14 @@ from frappe.utils.password import get_decrypted_password
 
 from testifield_bridge.api import TF_DOCTYPES
 
-WEBHOOK_EVENTS = ["after_insert", "on_submit", "on_cancel", "on_update_after_submit"]
+# Submit/cancel events exist only on submittable doctypes (Frappe refuses them
+# elsewhere); Project, Warehouse and Cost Center get insert and update.
+SUBMIT_EVENTS = ["after_insert", "on_submit", "on_cancel", "on_update_after_submit"]
+PLAIN_EVENTS = ["after_insert", "on_update"]
+
+
+def webhook_events(doctype):
+    return SUBMIT_EVENTS if frappe.get_meta(doctype).is_submittable else PLAIN_EVENTS
 
 # The least roles the posting map needs. Nothing about HR, nothing about
 # system settings; the accountant and payroll use their own accounts.
@@ -58,7 +65,7 @@ def ensure_webhooks(url=None, secret=None):
     URL and the secret come from point_webhooks; without a URL only webhooks
     that already exist are re-shaped (Frappe refuses one with no URL)."""
     for dt in TF_DOCTYPES:
-        for ev in WEBHOOK_EVENTS:
+        for ev in webhook_events(dt):
             name = f"TF {dt} {ev}"
             if frappe.db.exists("Webhook", name):
                 wh = frappe.get_doc("Webhook", name)
