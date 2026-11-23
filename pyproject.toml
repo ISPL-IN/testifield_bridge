@@ -1,0 +1,16 @@
+[project]
+name = "testifield_bridge"
+authors = [{ name = "INOV IT Solutions Private Limited", email = "dev@inovit.in" }]
+description = "The bridge between a Testifield instance and its ERPNext finance core: tf_ref and tf_user custom fields, signed webhooks, an integration user with the least roles. GPL-3.0, like ERPNext."
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = []
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=15.0.0,<16.0.0"
+erpnext = ">=15.0.0,<16.0.0"

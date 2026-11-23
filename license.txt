@@ -1,0 +1,10 @@
+GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007
+
+testifield_bridge is a Frappe app that runs inside an ERPNext site. ERPNext
+is licensed under the GNU GPL v3, and so is this app: its full text is at
+https://www.gnu.org/licenses/gpl-3.0.txt and applies to every file in this
+directory.
+
+Testifield itself — the application that talks to this app over HTTP — is a
+separate work, licensed separately, and is not a derivative of ERPNext or of
+this app (ADR-003).
