@@ -26,7 +26,7 @@ unmodified; everything here is fixtures and a few whitelisted helpers:
 ```
 bench get-app /path/to/testifield_bridge          # or the public repository, once published
 bench --site <site> install-app testifield_bridge
-bench --site <site> execute testifield_bridge.setup.make_integration_user --kwargs '{"email": "testifield@localhost"}'
+bench --site <site> execute testifield_bridge.setup.make_integration_user --kwargs '{"email": "testifield@erp.internal"}'
 bench --site <site> execute testifield_bridge.setup.point_webhooks --kwargs '{"url": "https://<instance>/api/finance/webhook", "secret": "<shared secret>"}'
 ```
 

@@ -105,7 +105,7 @@ def point_webhooks(url, secret):
     return {"enabled": n, "url": url}
 
 
-def make_integration_user(email="testifield@localhost", full_name="Testifield", regenerate=False):
+def make_integration_user(email="testifield@erp.internal", full_name="Testifield", regenerate=False):
     """The one user Testifield's server signs in as. Returns the API key and
     secret ONCE; keep them in the server's environment, never in a database."""
     if frappe.db.exists("User", email):
