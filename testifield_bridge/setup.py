@@ -15,13 +15,15 @@ INTEGRATION_ROLES = [
 
 
 def after_install():
+    # Only the fields: Frappe will not save a webhook without a request URL,
+    # so the webhooks are made by point_webhooks (site-setup.sh) once the
+    # instance's address and secret are known.
     ensure_custom_fields()
-    ensure_webhooks()
 
 
 def after_migrate():
     ensure_custom_fields()
-    ensure_webhooks()
+    ensure_webhooks()  # re-applies the shape of webhooks that already exist
 
 
 # where the two fields sit on each form: after the first field every form has
@@ -53,16 +55,19 @@ def ensure_custom_fields():
 
 def ensure_webhooks(url=None, secret=None):
     """One webhook per doctype per event, named 'TF <Doctype> <event>'. The
-    URL and the secret come from point_webhooks; until then the hooks exist
-    but are disabled."""
+    URL and the secret come from point_webhooks; without a URL only webhooks
+    that already exist are re-shaped (Frappe refuses one with no URL)."""
     for dt in TF_DOCTYPES:
         for ev in WEBHOOK_EVENTS:
             name = f"TF {dt} {ev}"
             if frappe.db.exists("Webhook", name):
                 wh = frappe.get_doc("Webhook", name)
-            else:
+            elif url:
                 wh = frappe.new_doc("Webhook")
                 wh.name = name
+                wh.flags.name_set = True  # keep our name, not the doctype's autoname
+            else:
+                continue
             wh.webhook_doctype = dt
             wh.webhook_docevent = ev
             wh.request_method = "POST"
