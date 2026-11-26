@@ -1,9 +1,8 @@
-import json
-
 import frappe
 from frappe.utils.password import get_decrypted_password
 
 from testifield_bridge.api import TF_DOCTYPES
+from testifield_bridge.webhook_body import body_template
 
 # Submit/cancel events exist only on submittable doctypes (Frappe refuses them
 # elsewhere); Project, Warehouse and Cost Center get insert and update.
@@ -80,12 +79,9 @@ def ensure_webhooks(url=None, secret=None):
             wh.request_method = "POST"
             wh.request_structure = "JSON"
             # The webhook renders with the document as plain data in Frappe's
-            # sandbox (no doc.as_json()); `tojson` puts it in as a JSON object.
-            head = json.dumps({
-                "doctype": "{{ doc.doctype }}", "name": "{{ doc.name }}", "event": ev,
-                "modified": "{{ doc.modified }}", "docstatus": "{{ doc.docstatus }}", "tf_ref": "{{ doc.tf_ref }}",
-            })
-            wh.webhook_json = head[:-1] + ', "doc": {{ doc | tojson }}}'
+            # sandbox (no doc.as_json()); every value goes in through `tojson`
+            # (webhook_body), so the body is valid JSON whatever a name holds.
+            wh.webhook_json = body_template(ev)
             wh.set("webhook_headers", [])
             wh.append("webhook_headers", {"key": "Content-Type", "value": "application/json"})
             wh.enable_security = 1
