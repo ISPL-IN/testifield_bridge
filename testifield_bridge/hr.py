@@ -93,6 +93,14 @@ def ensure_hr_custom_fields():
              "insert_after": "tf_ref", "read_only": 1, "no_copy": 1,
              "description": "Who in Testifield decided this (the real approver; the submitter is the integration user)"},
         ]
+    # tf_ref becomes unique: an empty string is no key (Frappe stores an empty unique
+    # field as NULL), and a duplicate is named rather than left to fail the migrate
+    for dt in fields:
+        if frappe.db.has_column(dt, "tf_ref"):
+            frappe.db.sql(f"update `tab{dt}` set tf_ref = NULL where tf_ref = ''")
+            dup = frappe.db.sql(f"select tf_ref, group_concat(name) from `tab{dt}` where tf_ref is not null group by tf_ref having count(*) > 1")
+            if dup:
+                frappe.throw(_("{0}: tf_ref is held by more than one record: {1}; a person must fix them before the bridge is set up").format(dt, dup))
     create_custom_fields(fields, ignore_validate=True, update=True)
     return sorted(fields)
 
@@ -105,8 +113,9 @@ def ensure_hr_settings():
     done = {}
     for field in ("prevent_self_leave_approval", "prevent_self_expense_approval"):
         if settings.meta.has_field(field):
+            # what it was is logged, so a change on a client's site is never silent
+            done[field] = {"was": settings.get(field), "now": 1}
             settings.set(field, 1)
-            done[field] = 1
         else:
             done[field] = "absent in this hrms version"
     settings.flags.ignore_permissions = True
@@ -215,6 +224,17 @@ def _ref(value, what):
     return value
 
 
+# the links a create method may set, and the doctype each points to: testifield-hr may
+# set only what its own permissions (company, User Permissions) let it read
+LINKS = {"company": "Company", "department": "Department", "project": "Project", "designation": "Designation",
+         "employee_separation_template": "Employee Separation Template"}
+
+
+def _readable(doctype, name, field):
+    if not frappe.has_permission(doctype, "read", doc=name, user=HR_USER):
+        frappe.throw(_("{0} may not use {1} {2} ({3})").format(HR_USER, doctype, name, field), frappe.PermissionError)
+
+
 def _employee_readable(employee):
     """testifield-hr acts for an employee only where its own permissions (company,
     User Permissions) let it read that employee, though the insert itself skips them."""
@@ -241,6 +261,12 @@ def _create(doctype, doc):
     for field in ("employee", "requested_by"):
         if doc.get(field) is not None:
             _employee_readable(_ref(doc[field], field))
+    for field, linked in LINKS.items():
+        if doc.get(field):
+            _readable(linked, _ref(doc[field], field), field)
+    if doc.get("reference_document_name"):
+        _readable(_ref(doc.get("reference_document_type"), "reference_document_type"),
+                  _ref(doc["reference_document_name"], "reference_document_name"), "reference_document_name")
     lock = f"tf_ref:{doctype}:{tf_ref}"[:64]
     if not frappe.db.sql("select get_lock(%s, 10)", lock)[0][0]:
         frappe.throw(_("another call for {0} is running; retry").format(tf_ref))
@@ -260,6 +286,8 @@ def _create(doctype, doc):
             # read that came before the lock) is the one, found as any retry would find it
             frappe.db.rollback()
             existing = frappe.db.get_value(doctype, {"tf_ref": tf_ref}, ["name", "docstatus"], as_dict=True)
+            if not existing:
+                raise    # the clash was another key (a name), not tf_ref: say so as it is
             return {"name": existing.name, "docstatus": existing.docstatus, "existing": True}
         frappe.db.commit()      # before the lock goes: the next caller must see this row
         return {"name": new.name, "docstatus": new.docstatus, "existing": False}
@@ -299,7 +327,8 @@ def submit_gratuity(name, tf_ref, tf_user, employee, amount, modified):
     _ref(tf_user, "tf_user")
     _ref(employee, "employee")
     _ref(modified, "modified")
-    doc = frappe.get_doc("Gratuity", name)
+    # the row is locked from this read to the submit, so no edit lands between the check and it
+    doc = frappe.get_doc("Gratuity", name, for_update=True)
     if doc.get("tf_ref") != tf_ref:
         frappe.throw(_("Gratuity {0} does not carry tf_ref {1}").format(name, tf_ref))
     if doc.docstatus == 1:

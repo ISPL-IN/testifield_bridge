@@ -71,7 +71,7 @@ def _stub_frappe():
     store = types.SimpleNamespace(docs={}, events=[], perms=[], roles={"HR User", "HR Manager", "Expense Approver",
                                                                        "Leave Approver", "Interviewer", "System Manager"},
                                   doctypes={"Job Requisition", "Employee Separation", "Exit Interview", "Gratuity", "Employee"},
-                                  readable_employees={"EMP-1"}, rolled_back=[])
+                                  readable_employees={"EMP-1"}, unreadable={"Other Company Ltd", "PROJ-OTHER"}, rolled_back=[])
     f = types.ModuleType("frappe")
     f.PermissionError = type("PermissionError", (_Throw,), {})
     f.DuplicateEntryError = type("DuplicateEntryError", (Exception,), {})
@@ -87,7 +87,9 @@ def _stub_frappe():
     f.get_installed_apps = lambda: ["frappe", "erpnext", "hrms", "testifield_bridge"]
     f.new_doc = lambda dt: _Doc(dt, store)
 
-    def get_doc(dt, name):
+    def get_doc(dt, name, for_update=False):
+        if for_update:
+            store.events.append(("for_update", dt, name))
         d = store.docs.get((dt, name))
         if d is None:
             raise _Throw(f"{dt} {name} not found")
@@ -110,7 +112,7 @@ def _stub_frappe():
                                  sql=lambda q, *a: store.events.append(("sql", q.split("(")[0])) or [[1]])
     f.get_all = lambda table, filters, fields: [types.SimpleNamespace(role=r) for (t, p, r, sub) in store.perms
                                                 if t == table and p == filters["parent"] and sub == filters.get("submit", sub)]
-    f.has_permission = lambda dt, ptype, doc=None, user=None: doc in store.readable_employees
+    f.has_permission = lambda dt, ptype, doc=None, user=None: doc in store.readable_employees if dt == "Employee" else doc not in store.unreadable
     pw = types.ModuleType("frappe.utils.password")
     pw.get_decrypted_password = lambda *a, **k: "SECRET"
     sys.modules.update({"frappe": f, "frappe.utils": types.ModuleType("frappe.utils"), "frappe.utils.password": pw})
@@ -229,6 +231,25 @@ class HrBridge(unittest.TestCase):
         self.assertEqual(out, {"name": "EXIT-7", "docstatus": 0, "existing": True})
         self.assertEqual(self.store.rolled_back, [True])
 
+    def test_create_refuses_a_company_or_project_testifield_hr_may_not_read(self):
+        self.as_hr()
+        with self.assertRaisesRegex(self.frappe.PermissionError, "Company Other Company Ltd"):
+            self.hr.create_job_requisition({"tf_ref": "jr:5", "tf_user": "u", "designation": "Surveyor", "company": "Other Company Ltd"})
+        with self.assertRaisesRegex(self.frappe.PermissionError, "Project PROJ-OTHER"):
+            self.hr.create_employee_separation({"tf_ref": "s:5", "tf_user": "u", "employee": "EMP-1", "project": "PROJ-OTHER"})
+        with self.assertRaises(self.frappe.PermissionError):
+            self.hr.create_exit_interview({"tf_ref": "x:5", "tf_user": "u", "employee": "EMP-1",
+                                           "reference_document_type": "Employee", "reference_document_name": "EMP-OTHER-COMPANY"})
+        self.assertFalse([e for e in self.store.events if e[0] == "insert"])
+        out = self.hr.create_job_requisition({"tf_ref": "jr:6", "tf_user": "u", "designation": "Surveyor", "company": "INOV IT Solutions Pvt Ltd"})
+        self.assertFalse(out["existing"])
+
+    def test_submit_gratuity_reads_the_draft_for_update(self):
+        self.as_hr()
+        self._draft_gratuity()
+        self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-1", 48076.92, "2026-11-27 10:00:00")
+        self.assertIn(("for_update", "Gratuity", "GR-1"), self.store.events)
+
     def test_create_checks_value_types_and_every_employee_it_names(self):
         self.as_hr()
         with self.assertRaisesRegex(_Throw, "single value"):
@@ -309,12 +330,15 @@ class HrBridge(unittest.TestCase):
         if hasattr(testifield_bridge, "api"):
             delattr(testifield_bridge, "api")
         api = importlib.import_module("testifield_bridge.api")
-        self.frappe.get_all = lambda dt, filters, fields, limit: []
+        used = []
+        self.frappe.get_all = lambda dt, filters, fields, limit: used.append("get_all") or []
+        self.frappe.get_list = lambda dt, filters, fields, limit: used.append("get_list") or []
         self.frappe.session.user = "testifield@erp.internal"      # the finance key
         with self.assertRaises(self.frappe.PermissionError):
             api.find_by_tf_ref("Employee Separation", "sep:1")
         self.as_hr()
         self.assertIsNone(api.find_by_tf_ref("Employee Separation", "sep:1"))
+        self.assertEqual(used, ["get_list"], "an HR record through the HR user's own permissions")
         with self.assertRaisesRegex(_Throw, "as text"):
             api.find_by_tf_ref("Employee Separation", ["like", "sep:%"])
 
