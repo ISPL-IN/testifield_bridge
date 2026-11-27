@@ -86,6 +86,8 @@ def _stub_frappe():
     f.generate_hash = lambda length=10: "h" * length
     f.get_installed_apps = lambda: ["frappe", "erpnext", "hrms", "testifield_bridge"]
     f.new_doc = lambda dt: _Doc(dt, store)
+    store.not_unique = set()
+    f.get_meta = lambda dt: types.SimpleNamespace(get_field=lambda fn: types.SimpleNamespace(unique=0 if dt in store.not_unique else 1))
 
     def get_doc(dt, name, for_update=False):
         if for_update:
@@ -249,6 +251,13 @@ class HrBridge(unittest.TestCase):
         self._draft_gratuity()
         self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-1", 48076.92, "2026-11-27 10:00:00")
         self.assertIn(("for_update", "Gratuity", "GR-1"), self.store.events)
+
+    def test_create_refuses_a_doctype_whose_tf_ref_a_migrate_left_not_unique(self):
+        self.as_hr()
+        self.store.not_unique.add("Exit Interview")
+        with self.assertRaisesRegex(_Throw, "not unique on this site"):
+            self.hr.create_exit_interview({"tf_ref": "x:9", "tf_user": "u", "employee": "EMP-1"})
+        self.assertFalse([e for e in self.store.events if e[0] == "insert"])
 
     def test_create_checks_value_types_and_every_employee_it_names(self):
         self.as_hr()

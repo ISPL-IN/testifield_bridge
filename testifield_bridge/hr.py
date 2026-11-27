@@ -265,6 +265,11 @@ def _create(doctype, doc):
     doc = frappe.parse_json(doc) if isinstance(doc, str) else dict(doc)
     tf_ref = _ref(doc.pop("tf_ref", None), "tf_ref")
     tf_user = _ref(doc.pop("tf_user", None), "tf_user")
+    # a doctype whose tf_ref a migrate left not unique (records shared one) takes no new
+    # record from Testifield until a person has cleaned it: the lock alone is not enough
+    field = frappe.get_meta(doctype).get_field("tf_ref")
+    if not field or not field.unique:
+        frappe.throw(_("{0}: tf_ref is not unique on this site (see the error log); a person must clean it first").format(doctype))
     extra = sorted(set(doc) - ALLOWED_FIELDS[doctype])
     if extra:
         frappe.throw(_("{0} does not accept {1} from Testifield").format(doctype, extra))
