@@ -207,6 +207,15 @@ class HrBridge(unittest.TestCase):
             self.hr.submit_gratuity({"tf_ref": "gr:1"}, "gr:1", "asha", "EMP-1", 48076.92, "2026-11-27 10:00:00")
         self.assertFalse([e for e in self.store.events if e[0] == "submit"])
 
+    def test_submit_gratuity_refuses_when_submit_itself_recomputes_another_amount(self):
+        self.as_hr()
+        g = self._draft_gratuity()
+        def submit_recomputes():          # a salary slip changed between the check and the submit
+            g["docstatus"] = 1; g["amount"] = 50000.00
+        object.__setattr__(g, "submit", submit_recomputes)
+        with self.assertRaisesRegex(_Throw, "would post 50000.0, not the 48076.92 approved"):
+            self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-1", 48076.92, "2026-11-27 10:00:00")
+
     def test_the_new_row_is_committed_before_the_lock_is_released(self):
         self.as_hr()
         self.hr.create_exit_interview({"tf_ref": "x:2", "tf_user": "u", "employee": "EMP-1"})

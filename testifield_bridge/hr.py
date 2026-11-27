@@ -15,6 +15,8 @@ The integration account.
   year, copied from the Indian standard rule.
 Nothing here runs on a site without hrms.
 """
+import hashlib
+
 import frappe
 from frappe import _
 
@@ -287,7 +289,7 @@ def _create(doctype, doc):
     if doc.get("reference_document_name"):
         _readable(_ref(doc.get("reference_document_type"), "reference_document_type"),
                   _ref(doc["reference_document_name"], "reference_document_name"), "reference_document_name")
-    lock = f"tf_ref:{doctype}:{tf_ref}"[:64]
+    lock = "tf:" + hashlib.sha1(f"{doctype}\0{tf_ref}".encode()).hexdigest()   # one lock per tf_ref, never a shared prefix
     if not frappe.db.sql("select get_lock(%s, 10)", lock)[0][0]:
         frappe.throw(_("another call for {0} is running; retry").format(tf_ref))
     try:
@@ -371,4 +373,9 @@ def submit_gratuity(name, tf_ref, tf_user, employee, amount, modified):
     doc.tf_user = tf_user
     doc.flags.ignore_permissions = True
     doc.submit()
+    # submit runs hrms' validate, which recomputes the amount again: if a salary slip or
+    # the rule changed since the check, what would post is not what was approved, and the
+    # throw rolls the whole request back
+    if abs(float(doc.get("amount") or 0) - float(amount)) >= 0.005:
+        frappe.throw(_("Gratuity {0} would post {1}, not the {2} approved: approve it again").format(name, doc.get("amount"), amount))
     return {"name": doc.name, "docstatus": doc.docstatus, "existing": False}
