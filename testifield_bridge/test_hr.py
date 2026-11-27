@@ -71,7 +71,7 @@ def _stub_frappe():
     store = types.SimpleNamespace(docs={}, events=[], perms=[], roles={"HR User", "HR Manager", "Expense Approver",
                                                                        "Leave Approver", "Interviewer", "System Manager"},
                                   doctypes={"Job Requisition", "Employee Separation", "Exit Interview", "Gratuity", "Employee"},
-                                  readable_employees={"EMP-1"}, unreadable={"Other Company Ltd", "PROJ-OTHER"}, rolled_back=[])
+                                  readable_employees={"EMP-1", "EMP-2"}, unreadable={"Other Company Ltd", "PROJ-OTHER"}, rolled_back=[])
     f = types.ModuleType("frappe")
     f.PermissionError = type("PermissionError", (_Throw,), {})
     f.DuplicateEntryError = type("DuplicateEntryError", (Exception,), {})
@@ -279,6 +279,49 @@ class HrBridge(unittest.TestCase):
         self.assertEqual(hooks["Gratuity"]["condition"], "doc.tf_ref")
         self.assertEqual(hooks["Purchase Receipt"]["condition"], "")
 
+    def _fields_stub(self, shared_counts):
+        made = {}
+        cf = types.ModuleType("frappe.custom.doctype.custom_field.custom_field")
+        cf.create_custom_fields = lambda fields, **k: made.update(fields)
+        for m in ("frappe.custom", "frappe.custom.doctype", "frappe.custom.doctype.custom_field"):
+            sys.modules[m] = types.ModuleType(m)
+        sys.modules["frappe.custom.doctype.custom_field.custom_field"] = cf
+        self.frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[types.SimpleNamespace(fieldname="employee")])
+        self.frappe.db.has_column = lambda dt, col: True
+        logged = []
+        self.frappe.log_error = lambda title, message: logged.append(message)
+        def sql(q, *a):
+            self.store.events.append(("sql", q.split(" ")[0]))
+            dt = q.split("`tab")[1].split("`")[0]
+            return [[shared_counts.get(dt, (0, 0))[0 if "having" in q else 1]]]
+        self.frappe.db.sql = sql
+        return made, logged
+
+    def test_tf_ref_is_unique_where_no_records_share_one_and_nothing_is_rewritten(self):
+        made, logged = self._fields_stub({"Employee": (2, 0)})
+        self.hr.ensure_hr_custom_fields()                       # after_migrate: never stops the upgrade
+        self.assertEqual(made["Employee"][0]["unique"], 0)
+        self.assertEqual(made["Gratuity"][0]["unique"], 1)
+        self.assertIn("shared_values", logged[0])
+        self.assertNotIn("update", [e[1] for e in self.store.events if e[0] == "sql"])
+        with self.assertRaisesRegex(_Throw, "a person must look"):
+            self.hr.ensure_hr_custom_fields(strict=True)        # setup_hr: may fail, and says why
+
+    def test_the_hr_secret_is_returned_only_when_the_key_is_made(self):
+        first = self.hr.make_hr_integration_user()
+        self.assertEqual(first["api_secret"], "SECRET")
+        again = self.hr.make_hr_integration_user()
+        self.assertNotIn("api_secret", again, "a re-run never prints the secret again")
+
+    def test_submit_gratuity_never_confirms_a_submitted_one_for_another_employee(self):
+        self.as_hr()
+        g = self._draft_gratuity(); g["docstatus"] = 1
+        with self.assertRaisesRegex(_Throw, "employee changed"):
+            self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-2", 48076.92, "2026-11-27 10:00:00")
+        g["employee"] = "EMP-OTHER-COMPANY"
+        with self.assertRaises(self.frappe.PermissionError):
+            self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-OTHER-COMPANY", 48076.92, "2026-11-27 10:00:00")
+
     def test_the_hr_user_gets_the_five_hr_roles_and_never_system_manager(self):
         out = self.hr.make_hr_integration_user()
         self.assertEqual(out["roles"], sorted(self.hr.HR_ROLES))
@@ -318,7 +361,7 @@ class HrBridge(unittest.TestCase):
         settings = self.frappe.new_doc("HR Settings")
         settings.meta = types.SimpleNamespace(has_field=lambda f: True)
         self.frappe.get_single = lambda dt: settings
-        self.hr.ensure_hr_custom_fields = lambda: []       # needs a site's meta; covered on the box
+        self.hr.ensure_hr_custom_fields = lambda **k: []       # needs a site's meta; covered on the box
         out = self.hr.setup_hr(sandbox=0)
         self.assertIn("not on a site that is not a sandbox", out["components"])
         self.assertFalse(self.frappe.db.exists("Salary Component", "ESI (Employee)"))

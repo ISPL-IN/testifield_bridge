@@ -64,7 +64,7 @@ def setup_hr(sandbox=0):
     if not hrms_installed():
         return {"hrms": False}
     out = {"hrms": True}
-    out["fields"] = ensure_hr_custom_fields()
+    out["fields"] = ensure_hr_custom_fields(strict=True)
     out["settings"] = ensure_hr_settings()
     if int(sandbox or 0) == 1:
         out["components"] = ensure_statutory_components()
@@ -76,9 +76,12 @@ def setup_hr(sandbox=0):
     return out
 
 
-def ensure_hr_custom_fields():
+def ensure_hr_custom_fields(strict=False):
     """tf_ref and tf_user on each HR doctype present, after its first field (HR
-    doctypes do not all have a naming_series)."""
+    doctypes do not all have a naming_series). tf_ref is unique where no two records
+    share one. strict (setup_hr, a step allowed to fail) stops on a doctype whose
+    records share one; after_migrate (never allowed to stop a site's upgrade) leaves
+    that doctype's tf_ref not unique and logs only a count."""
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
     fields = {}
@@ -93,15 +96,23 @@ def ensure_hr_custom_fields():
              "insert_after": "tf_ref", "read_only": 1, "no_copy": 1,
              "description": "Who in Testifield decided this (the real approver; the submitter is the integration user)"},
         ]
-    # tf_ref becomes unique: an empty string is no key (Frappe stores an empty unique
-    # field as NULL), and a duplicate is named rather than left to fail the migrate
+    # tf_ref becomes unique only where no two records share a value. tf_ref is read-only
+    # and set only by Testifield, so an empty string there is a blank, not a key: the
+    # count is checked over non-empty values, and Frappe stores an empty unique field as
+    # NULL from then on. Nothing is rewritten.
+    shared = {}
     for dt in fields:
         if frappe.db.has_column(dt, "tf_ref"):
-            frappe.db.sql(f"update `tab{dt}` set tf_ref = NULL where tf_ref = ''")
-            dup = frappe.db.sql(f"select tf_ref, group_concat(name) from `tab{dt}` where tf_ref is not null group by tf_ref having count(*) > 1")
-            if dup:
-                frappe.throw(_("{0}: tf_ref is held by more than one record: {1}; a person must fix them before the bridge is set up").format(dt, dup))
+            n = frappe.db.sql(f"select count(*) from (select tf_ref from `tab{dt}` where ifnull(tf_ref, '') != '' group by tf_ref having count(*) > 1) d")[0][0]
+            blank = frappe.db.sql(f"select count(*) from `tab{dt}` where tf_ref = ''")[0][0]
+            if n or blank > 1:
+                shared[dt] = {"shared_values": n, "blank": blank}
+                fields[dt][0]["unique"] = 0
+    if shared and strict:
+        frappe.throw(_("tf_ref is shared or blank on more than one record in {0}: a person must look before the bridge is set up").format(shared))
     create_custom_fields(fields, ignore_validate=True, update=True)
+    if shared:
+        frappe.log_error(title="testifield_bridge: tf_ref left not unique", message=str(shared))
     return sorted(fields)
 
 
@@ -183,7 +194,8 @@ def make_hr_integration_user(email=HR_USER, full_name="Testifield HR", regenerat
     user.set("roles", [])
     for r in HR_ROLES:
         user.append("roles", {"role": r})
-    if not user.api_key or regenerate:
+    new_key = not user.api_key or bool(regenerate)
+    if new_key:
         user.api_key = frappe.generate_hash(length=15)
         user.api_secret = frappe.generate_hash(length=15)
     user.flags.ignore_permissions = True
@@ -194,9 +206,12 @@ def make_hr_integration_user(email=HR_USER, full_name="Testifield HR", regenerat
         frappe.throw(_("testifield-hr would hold {0}, not exactly the five HR roles").format(sorted(held)))
     user.save()
     frappe.db.commit()
-    from frappe.utils.password import get_decrypted_password
-    secret = get_decrypted_password("User", user.name, "api_secret", raise_exception=False)
-    return {"user": user.name, "api_key": user.api_key, "api_secret": secret, "roles": sorted(held)}
+    out = {"user": user.name, "api_key": user.api_key, "roles": sorted(held)}
+    if new_key:
+        # only when made now: a re-run never prints it again (redact-setup.py keeps the file)
+        from frappe.utils.password import get_decrypted_password
+        out["api_secret"] = get_decrypted_password("User", user.name, "api_secret", raise_exception=False)
+    return out
 
 
 # ---- the four methods (called by testifield-hr only) ------------------------------------------
@@ -331,6 +346,11 @@ def submit_gratuity(name, tf_ref, tf_user, employee, amount, modified):
     doc = frappe.get_doc("Gratuity", name, for_update=True)
     if doc.get("tf_ref") != tf_ref:
         frappe.throw(_("Gratuity {0} does not carry tf_ref {1}").format(name, tf_ref))
+    # who it is for is checked first, so a submitted one is never confirmed to a caller
+    # that names another employee or may not read this one
+    _employee_readable(employee)
+    if doc.get("employee") != employee:
+        frappe.throw(_("Gratuity {0} is not the one that was approved (employee changed): approve it again").format(name))
     if doc.docstatus == 1:
         return {"name": doc.name, "docstatus": 1, "existing": True}
     if doc.docstatus == 2:
@@ -343,7 +363,6 @@ def submit_gratuity(name, tf_ref, tf_user, employee, amount, modified):
                                ("modified", str(doc.get("modified")) == modified)) if not ok]
     if changed:
         frappe.throw(_("Gratuity {0} is not the one that was approved ({1} changed): approve it again").format(name, ", ".join(changed)))
-    _employee_readable(employee)
     doc.tf_user = tf_user
     doc.flags.ignore_permissions = True
     doc.submit()
