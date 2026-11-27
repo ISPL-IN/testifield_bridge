@@ -286,6 +286,8 @@ def _create(doctype, doc):
     for field, linked in LINKS.items():
         if doc.get(field):
             _readable(linked, _ref(doc[field], field), field)
+    if doc.get("reference_document_type") and not doc.get("reference_document_name"):
+        frappe.throw(_("reference_document_type is accepted only with reference_document_name"))
     if doc.get("reference_document_name"):
         _readable(_ref(doc.get("reference_document_type"), "reference_document_type"),
                   _ref(doc["reference_document_name"], "reference_document_name"), "reference_document_name")
@@ -349,7 +351,9 @@ def submit_gratuity(name, tf_ref, tf_user, employee, amount, modified):
     _ref(tf_user, "tf_user")
     _ref(employee, "employee")
     _ref(modified, "modified")
-    # the row is locked from this read to the submit, so no edit lands between the check and it
+    # the Gratuity itself must be one testifield-hr may read (company, User Permissions),
+    # not only its employee; then the row is locked from this read to the submit
+    _readable("Gratuity", name, "name")
     doc = frappe.get_doc("Gratuity", name, for_update=True)
     if doc.get("tf_ref") != tf_ref:
         frappe.throw(_("Gratuity {0} does not carry tf_ref {1}").format(name, tf_ref))

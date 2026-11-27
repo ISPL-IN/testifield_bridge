@@ -255,6 +255,19 @@ class HrBridge(unittest.TestCase):
         out = self.hr.create_job_requisition({"tf_ref": "jr:6", "tf_user": "u", "designation": "Surveyor", "company": "INOV IT Solutions Pvt Ltd"})
         self.assertFalse(out["existing"])
 
+    def test_submit_gratuity_refuses_a_gratuity_testifield_hr_may_not_read(self):
+        self.as_hr()
+        self._draft_gratuity()
+        self.store.unreadable.add("GR-1")
+        with self.assertRaisesRegex(self.frappe.PermissionError, "Gratuity GR-1"):
+            self.hr.submit_gratuity("GR-1", "gr:1", "asha", "EMP-1", 48076.92, "2026-11-27 10:00:00")
+        self.assertFalse([e for e in self.store.events if e[0] == "submit"])
+
+    def test_an_exit_interview_reference_type_needs_its_name(self):
+        self.as_hr()
+        with self.assertRaisesRegex(_Throw, "only with reference_document_name"):
+            self.hr.create_exit_interview({"tf_ref": "x:8", "tf_user": "u", "employee": "EMP-1", "reference_document_type": "User"})
+
     def test_submit_gratuity_reads_the_draft_for_update(self):
         self.as_hr()
         self._draft_gratuity()
